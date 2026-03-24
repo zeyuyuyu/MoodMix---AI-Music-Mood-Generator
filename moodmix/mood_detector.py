@@ -1,80 +1,81 @@
+import cv2
 import numpy as np
-from typing import Tuple, Dict
-import librosa
+from tensorflow.keras.models import load_model
+from tensorflow.keras.preprocessing.image import img_to_array
+from statistics import mode
 
 class MoodDetector:
     def __init__(self):
-        self.valence_features = ['spectral_rolloff', 'tempo', 'spectral_centroid']
-        self.arousal_features = ['rms_energy', 'zero_crossing_rate', 'spectral_contrast']
+        self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+        self.emotion_model = load_model('models/emotion_model.h5')
+        self.emotions = ['angry', 'disgust', 'fear', 'happy', 'sad', 'surprise', 'neutral']
+        self.mood_buffer = []
+        self.buffer_size = 10
+    
+    def preprocess_face(self, face_img):
+        face_img = cv2.resize(face_img, (48, 48))
+        face_img = face_img.astype('float') / 255.0
+        face_img = img_to_array(face_img)
+        face_img = np.expand_dims(face_img, axis=0)
+        return face_img
+    
+    def detect_mood(self, frame=None):
+        if frame is None:
+            cap = cv2.VideoCapture(0)
+            ret, frame = cap.read()
+            if not ret:
+                return None
+            cap.release()
         
-    def extract_audio_features(self, audio_path: str) -> Dict[str, float]:
-        """Extract relevant audio features for mood detection."""
-        y, sr = librosa.load(audio_path)
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        faces = self.face_cascade.detectMultiScale(gray, 1.3, 5)
         
-        features = {}
-        # Valence features
-        features['spectral_rolloff'] = np.mean(librosa.feature.spectral_rolloff(y=y, sr=sr))
-        features['tempo'] = librosa.beat.tempo(y=y, sr=sr)[0]
-        features['spectral_centroid'] = np.mean(librosa.feature.spectral_centroid(y=y, sr=sr))
+        if len(faces) == 0:
+            return 'neutral'
         
-        # Arousal features
-        features['rms_energy'] = np.mean(librosa.feature.rms(y=y))
-        features['zero_crossing_rate'] = np.mean(librosa.feature.zero_crossing_rate(y=y))
-        features['spectral_contrast'] = np.mean(librosa.feature.spectral_contrast(y=y, sr=sr))
-        
-        return features
-
-    def normalize_features(self, features: Dict[str, float]) -> Dict[str, float]:
-        """Normalize feature values to [0,1] range."""
-        # Pre-defined normalization ranges based on typical values
-        ranges = {
-            'spectral_rolloff': (500, 12000),
-            'tempo': (50, 200),
-            'spectral_centroid': (500, 10000),
-            'rms_energy': (0.01, 0.5),
-            'zero_crossing_rate': (0.01, 0.3),
-            'spectral_contrast': (-50, 50)
-        }
-        
-        normalized = {}
-        for feature, value in features.items():
-            min_val, max_val = ranges[feature]
-            normalized[feature] = np.clip((value - min_val) / (max_val - min_val), 0, 1)
-        
-        return normalized
-
-    def calculate_mood_coordinates(self, features: Dict[str, float]) -> Tuple[float, float]:
-        """Calculate valence and arousal coordinates from audio features."""
-        normalized = self.normalize_features(features)
-        
-        # Calculate valence (x-axis) - emotional positivity
-        valence = np.mean([normalized[f] for f in self.valence_features])
-        
-        # Calculate arousal (y-axis) - energy level
-        arousal = np.mean([normalized[f] for f in self.arousal_features])
-        
-        return valence, arousal
-
-    def detect_mood(self, audio_path: str) -> Dict[str, float]:
-        """Detect mood from audio file using valence-arousal model."""
-        features = self.extract_audio_features(audio_path)
-        valence, arousal = self.calculate_mood_coordinates(features)
-        
-        # Map coordinates to mood categories
-        moods = {
-            'happy': max(0, valence * arousal),
-            'sad': max(0, (1-valence) * (1-arousal)),
-            'angry': max(0, (1-valence) * arousal),
-            'relaxed': max(0, valence * (1-arousal))
-        }
-        
-        # Normalize mood scores to sum to 1
-        total = sum(moods.values())
-        if total > 0:
-            moods = {k: v/total for k, v in moods.items()}
+        for (x, y, w, h) in faces:
+            roi_gray = gray[y:y + h, x:x + w]
+            processed_face = self.preprocess_face(roi_gray)
+            emotion_pred = self.emotion_model.predict(processed_face)[0]
+            emotion_label = self.emotions[np.argmax(emotion_pred)]
             
+            self.mood_buffer.append(emotion_label)
+            if len(self.mood_buffer) > self.buffer_size:
+                self.mood_buffer.pop(0)
+        
+        # Return most common emotion in buffer for stability
+        return mode(self.mood_buffer) if self.mood_buffer else 'neutral'
+    
+    def get_mood_intensity(self):
+        """Returns intensity level of current mood (0-1)"""
+        if not self.mood_buffer:
+            return 0.5
+        
+        current_mood = mode(self.mood_buffer)
+        intensity = self.mood_buffer.count(current_mood) / len(self.mood_buffer)
+        return intensity
+    
+    def get_mood_valence(self, mood):
+        """Maps detected mood to valence score (-1 to 1)"""
+        valence_map = {
+            'happy': 0.8,
+            'surprise': 0.4,
+            'neutral': 0.0,
+            'sad': -0.6,
+            'fear': -0.7,
+            'disgust': -0.8,
+            'angry': -0.9
+        }
+        return valence_map.get(mood, 0.0)
+
+    def get_continuous_mood_vector(self):
+        """Returns continuous mood parameters for music generation"""
+        current_mood = self.detect_mood()
+        intensity = self.get_mood_intensity()
+        valence = self.get_mood_valence(current_mood)
+        
         return {
-            'valence': valence,
-            'arousal': arousal,
-            'moods': moods
+            'mood': current_mood,
+            'intensity': intensity,
+            'valence': valence
         }
