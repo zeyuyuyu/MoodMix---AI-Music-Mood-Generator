@@ -2,80 +2,81 @@ import cv2
 import numpy as np
 from tensorflow.keras.models import load_model
 from tensorflow.keras.preprocessing.image import img_to_array
-from statistics import mode
 
 class MoodDetector:
     def __init__(self):
+        # Load pre-trained face detection cascade
         self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+        # Load pre-trained emotion detection model
         self.emotion_model = load_model('models/emotion_model.h5')
-        self.emotions = ['angry', 'disgust', 'fear', 'happy', 'sad', 'surprise', 'neutral']
-        self.mood_buffer = []
-        self.buffer_size = 10
-    
-    def preprocess_face(self, face_img):
-        face_img = cv2.resize(face_img, (48, 48))
-        face_img = face_img.astype('float') / 255.0
-        face_img = img_to_array(face_img)
-        face_img = np.expand_dims(face_img, axis=0)
-        return face_img
-    
-    def detect_mood(self, frame=None):
-        if frame is None:
-            cap = cv2.VideoCapture(0)
+        self.emotions = ['Angry', 'Disgust', 'Fear', 'Happy', 'Sad', 'Surprise', 'Neutral']
+
+    def detect_mood_from_camera(self):
+        cap = cv2.VideoCapture(0)
+        emotions_buffer = []
+        
+        while True:
             ret, frame = cap.read()
             if not ret:
-                return None
-            cap.release()
-        
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        faces = self.face_cascade.detectMultiScale(gray, 1.3, 5)
-        
-        if len(faces) == 0:
-            return 'neutral'
-        
-        for (x, y, w, h) in faces:
-            roi_gray = gray[y:y + h, x:x + w]
-            processed_face = self.preprocess_face(roi_gray)
-            emotion_pred = self.emotion_model.predict(processed_face)[0]
-            emotion_label = self.emotions[np.argmax(emotion_pred)]
-            
-            self.mood_buffer.append(emotion_label)
-            if len(self.mood_buffer) > self.buffer_size:
-                self.mood_buffer.pop(0)
-        
-        # Return most common emotion in buffer for stability
-        return mode(self.mood_buffer) if self.mood_buffer else 'neutral'
-    
-    def get_mood_intensity(self):
-        """Returns intensity level of current mood (0-1)"""
-        if not self.mood_buffer:
-            return 0.5
-        
-        current_mood = mode(self.mood_buffer)
-        intensity = self.mood_buffer.count(current_mood) / len(self.mood_buffer)
-        return intensity
-    
-    def get_mood_valence(self, mood):
-        """Maps detected mood to valence score (-1 to 1)"""
-        valence_map = {
-            'happy': 0.8,
-            'surprise': 0.4,
-            'neutral': 0.0,
-            'sad': -0.6,
-            'fear': -0.7,
-            'disgust': -0.8,
-            'angry': -0.9
-        }
-        return valence_map.get(mood, 0.0)
+                break
 
-    def get_continuous_mood_vector(self):
-        """Returns continuous mood parameters for music generation"""
-        current_mood = self.detect_mood()
-        intensity = self.get_mood_intensity()
-        valence = self.get_mood_valence(current_mood)
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            faces = self.face_cascade.detectMultiScale(gray, 1.3, 5)
+
+            for (x, y, w, h) in faces:
+                face_roi = gray[y:y+h, x:x+w]
+                face_roi = cv2.resize(face_roi, (48, 48))
+                face_roi = img_to_array(face_roi)
+                face_roi = np.expand_dims(face_roi, axis=0)
+                face_roi = face_roi / 255.0
+
+                # Predict emotion
+                predictions = self.emotion_model.predict(face_roi)[0]
+                emotion_idx = np.argmax(predictions)
+                emotion = self.emotions[emotion_idx]
+                confidence = predictions[emotion_idx]
+
+                # Add to buffer for smoothing
+                emotions_buffer.append(emotion)
+                if len(emotions_buffer) > 30:  # Keep last 30 frames
+                    emotions_buffer.pop(0)
+
+                # Draw rectangle around face
+                cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
+                
+                # Display detected emotion
+                dominant_emotion = max(set(emotions_buffer), key=emotions_buffer.count)
+                cv2.putText(frame, f'{dominant_emotion} ({confidence:.2f})',
+                           (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.9,
+                           (0, 255, 0), 2)
+
+            cv2.imshow('Mood Detection', frame)
+
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+
+        cap.release()
+        cv2.destroyAllWindows()
         
-        return {
-            'mood': current_mood,
-            'intensity': intensity,
-            'valence': valence
+        # Return the most frequent emotion in buffer
+        if emotions_buffer:
+            return max(set(emotions_buffer), key=emotions_buffer.count)
+        return 'Neutral'
+
+    def get_mood_mapping(self, emotion):
+        """Map detected emotion to musical characteristics"""
+        mood_mappings = {
+            'Happy': {'tempo': 'fast', 'mode': 'major', 'energy': 'high'},
+            'Sad': {'tempo': 'slow', 'mode': 'minor', 'energy': 'low'},
+            'Angry': {'tempo': 'fast', 'mode': 'minor', 'energy': 'high'},
+            'Neutral': {'tempo': 'medium', 'mode': 'major', 'energy': 'medium'},
+            'Surprise': {'tempo': 'fast', 'mode': 'major', 'energy': 'high'},
+            'Fear': {'tempo': 'medium', 'mode': 'minor', 'energy': 'medium'},
+            'Disgust': {'tempo': 'slow', 'mode': 'minor', 'energy': 'medium'}
         }
+        return mood_mappings.get(emotion, mood_mappings['Neutral'])
+
+if __name__ == '__main__':
+    detector = MoodDetector()
+    detected_mood = detector.detect_mood_from_camera()
+    print(f'Detected mood: {detected_mood}')
