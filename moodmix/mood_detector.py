@@ -1,42 +1,35 @@
+import librosa
 import numpy as np
-import tensorflow as tf
-from tensorflow.keras.models import load_model
+from typing import Tuple
 
-class EmotionDetector:
-    def __init__(self, model_path='moodmix/emotion_model.h5'):
-        self.model = load_model(model_path)
-
-    def detect_emotion(self, audio_data):
-        """
-        Detects the dominant emotion in the given audio data.
-        
-        Args:
-            audio_data (np.ndarray): The audio data to analyze.
-        
-        Returns:
-            str: The detected emotion ('happy', 'sad', 'angry', 'calm', 'fearful', 'surprised', 'neutral').
-        """
-        # Preprocess the audio data
-        audio_data = self.preprocess_audio(audio_data)
-        
-        # Make a prediction using the emotion detection model
-        prediction = self.model.predict(audio_data)
-        emotion_index = np.argmax(prediction[0])
-        
-        # Map the emotion index to a label
-        emotions = ['happy', 'sad', 'angry', 'calm', 'fearful', 'surprised', 'neutral']
-        return emotions[emotion_index]
+def extract_audio_features(audio_file: str) -> Tuple[np.ndarray, int]:
+    """
+    Extract audio features from an audio file.
     
-    def preprocess_audio(self, audio_data):
-        """
-        Preprocesses the audio data for emotion detection.
+    Args:
+        audio_file (str): Path to the audio file.
         
-        Args:
-            audio_data (np.ndarray): The audio data to preprocess.
+    Returns:
+        Tuple[np.ndarray, int]: A tuple containing the audio features and the sampling rate.
+    """
+    y, sr = librosa.load(audio_file)
+    mfcc = librosa.feature.mfcc(y=y, sr=sr)
+    return mfcc, sr
+
+def detect_mood(audio_features: np.ndarray, sampling_rate: int) -> str:
+    """
+    Detect the mood of the audio based on the extracted features.
+    
+    Args:
+        audio_features (np.ndarray): The audio features extracted from the audio file.
+        sampling_rate (int): The sampling rate of the audio file.
         
-        Returns:
-            np.ndarray: The preprocessed audio data.
-        """
-        # Perform any necessary preprocessing steps, such as normalization, resampling, or feature extraction
-        audio_data = np.expand_dims(audio_data, axis=0)
-        return audio_data
+    Returns:
+        str: The detected mood ('happy', 'sad', 'angry', 'calm').
+    """
+    # Implement your mood detection logic here
+    # This could involve training a machine learning model on labeled audio data
+    # and using the trained model to predict the mood of the input audio
+    
+    # For now, let's return a placeholder mood
+    return 'happy'
